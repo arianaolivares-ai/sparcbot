@@ -107,13 +107,55 @@ class WheelController:
         # and the state set up in __init__. Use self.log(...) to record data.
 
         # BEGIN SOLUTION
+        # BEGIN SOLUTION
+        outputs = []
+        for i in (LEFT, RIGHT):
+            cfg = self.config[i]
+            v_des = target_velocity_m_s[i]
+            v = measured_velocity_m_s[i]
+            error = v_des - v
 
+            if abs(v_des) < cfg.zero_velocity_threshold:
+                # Target is ~0: stop the motor and clear the integrator.
+                self.error_integral[i] = 0.0
+                ff = 0.0
+                fb = 0.0
+                u = 0.0
+            else:
+                # Feedforward (assumes the yaml values are positive magnitudes)
+                if v_des > 0.0:
+                    ff = cfg.forward_static + cfg.forward_velocity_gain * v_des
+                else:
+                    ff = -(cfg.reverse_static + cfg.reverse_velocity_gain * abs(v_des))
 
+                # Feedback (PID)
+                candidate_integral = self.error_integral[i] + error * dt_s
+                derivative = 0.0 if self.first_step else (error - self.previous_error[i]) / dt_s
+                fb = cfg.kp * error + cfg.ki * candidate_integral + cfg.kd * derivative
 
-        left_wheel_output = WheelControllerOutput(command=0.0) #TODO set command to your final controller output
+                u_unsat = ff + fb
+                u = max(-cfg.max_command, min(cfg.max_command, u_unsat))
 
-        right_wheel_output = WheelControllerOutput(command=0.0) #TODO set command to your final controller output
-        return [left_wheel_output, right_wheel_output]
+                # Anti-windup: only keep integrating if not saturated,
+                # or if the error is pulling the output back out of saturation.
+                if abs(u_unsat) <= cfg.max_command or u_unsat * error < 0.0:
+                    self.error_integral[i] = candidate_integral
+
+            self.previous_error[i] = error
+            self.previous_command[i] = u
+            outputs.append(WheelControllerOutput(
+                error_m_s=error, feedforward_command=ff,
+                feedback_command=fb, command=u))
+
+        self.first_step = False
+
+        self.log(time_s=self.time_s,
+                 left_target=target_velocity_m_s[LEFT], left_measured=measured_velocity_m_s[LEFT],
+                 left_command=outputs[LEFT].command,
+                 right_target=target_velocity_m_s[RIGHT], right_measured=measured_velocity_m_s[RIGHT],
+                 right_command=outputs[RIGHT].command)
+
+        return outputs
         # END SOLUTION
 
     def reset(self) -> None:

@@ -32,7 +32,7 @@ sparcbot_driver:
       pwm_chip: 0
       pwm_channel: 0
       pwm_frequency_hz: 20000
-      motor_sign: 1
+      motor_sign: -1
       encoder_sign: -1
 
     right_motor:
@@ -44,7 +44,7 @@ sparcbot_driver:
       pwm_chip: 0
       pwm_channel: 1
       pwm_frequency_hz: 20000
-      motor_sign: 1
+      motor_sign: -1
       encoder_sign: 1
 
 # -----------------------------------------------------------------------------

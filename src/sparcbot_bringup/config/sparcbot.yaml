@@ -79,13 +79,13 @@ wheel_controller:
       kd: 0.0
       feedforward:
         forward_static: 0.12
-        forward_velocity_gain: 1.5
+        forward_velocity_gain: 1.0
         reverse_static: 0.12
-        reverse_velocity_gain: 1.5
+        reverse_velocity_gain: 1.0
         forward_breakaway: 0.18
         reverse_breakaway: 0.18
         stopped_velocity_threshold: 0.025
-        max_command: 0.5
+        max_command: 1.0
         zero_velocity_threshold: 0.0005
 
     right:
@@ -94,11 +94,12 @@ wheel_controller:
       kd: 0.0
       feedforward:
         forward_static: 0.12
-        forward_velocity_gain: 1.5
+        forward_velocity_gain: 1.0
         reverse_static: 0.12
-        reverse_velocity_gain: 1.5
+        reverse_velocity_gain: 1.0
         forward_breakaway: 0.18
         reverse_breakaway: 0.18
         stopped_velocity_threshold: 0.025
-        max_command: 0.5
+        max_command: 1.0
         zero_velocity_threshold: 0.0005
+   

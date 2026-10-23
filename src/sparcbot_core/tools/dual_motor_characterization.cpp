@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
+#include <vector>
+#include <stdexcept>
 #include <csignal>
 #include <iomanip>
 #include <iostream>
@@ -648,6 +651,109 @@ void printDirectionResult(const DirectionResult& result, int direction)
 }
 
 // ============================================================
+// STEADY-STATE PWM SWEEP (ONE WHEEL AT A TIME)
+// ============================================================
+
+struct SweepPoint { double speed_m_s; double duty; };
+
+// Conservative unloaded diagnostic. Increase only after validating response.
+constexpr double SWEEP_START = 0.12;
+constexpr double SWEEP_END = 0.30;
+constexpr double SWEEP_STEP = 0.03;
+constexpr int SWEEP_SETTLE_MS = 350;
+constexpr int SWEEP_MEASURE_MS = 650;
+constexpr double WHEEL_RADIUS_M = 0.050;
+
+// Prevent an exception or early return from leaving the motors commanded.
+struct MotorCoastGuard {
+    RobotMotors& motors;
+    ~MotorCoastGuard() { motors.coast(); }
+};
+
+long long wheelCounts(const RobotMotorState& state, bool left) {
+    return left ? state.left.counts : state.right.counts;
+}
+
+void printFeedforwardFit(const std::vector<SweepPoint>& points,
+                         bool left, int direction) {
+    // Least-squares |PWM| = static + velocity_gain * |velocity|.
+    if (points.size() < 3) {
+        std::cout << "Insufficient valid samples for fit.\n";
+        return;
+    }
+    double sx=0, sy=0, sxx=0, sxy=0;
+    for (const auto& p : points) {
+        sx += p.speed_m_s;
+        sy += p.duty;
+        sxx += p.speed_m_s * p.speed_m_s;
+        sxy += p.speed_m_s * p.duty;
+    }
+    const double n = static_cast<double>(points.size());
+    const double den = n*sxx - sx*sx;
+    if (std::abs(den) < 1e-8) {
+        std::cout << "Insufficient velocity spread for fit.\n";
+        return;
+    }
+    const double kv = (n*sxy - sx*sy)/den;
+    const double us = (sy - kv*sx)/n;
+    std::cout << "\n" << wheelName(left) << " " << directionName(direction)
+              << " fit: |PWM| = " << us << " + " << kv << " * |v_m_s|\n";
+    if (us < 0 || kv <= 0) {
+        std::cout << "WARNING: Nonphysical fit. Check slip, measurement range, and data.\n";
+    } else {
+        std::cout << "Suggested " << (direction > 0 ? "forward" : "reverse")
+                  << "_static: " << us << "\n"
+                  << "Suggested " << (direction > 0 ? "forward" : "reverse")
+                  << "_velocity_gain: " << kv << "\n";
+    }
+}
+
+void runSteadySweep(RobotMotors& motors) {
+    MotorCoastGuard guard{motors};
+    std::ofstream csv("motor_pwm_sweep.csv");
+    if (!csv) throw std::runtime_error("Cannot open motor_pwm_sweep.csv");
+    csv << "wheel,direction,duty,velocity_m_s,encoder_delta,measure_s\n";
+    std::cout << "\nSTEADY PWM SWEEP: max duty " << SWEEP_END
+              << "; one wheel at a time. Robot must be secured with wheels clear.\n";
+    for (bool left : {true, false}) {
+        for (int direction : {+1, -1}) {
+            std::vector<SweepPoint> points;
+            for (int step=0; keep_running; ++step) {
+                const double duty = SWEEP_START + step*SWEEP_STEP;
+                if (duty > SWEEP_END + 1e-9) break;
+                coastAll(motors);
+                if (!sleepInterruptible(REST_MS)) break;
+                commandSingleWheel(motors, left, direction*duty);
+                if (!sleepInterruptible(SWEEP_SETTLE_MS)) break;
+                const auto start = std::chrono::steady_clock::now();
+                const auto count0 = wheelCounts(motors.getState(), left);
+                if (!sleepInterruptible(SWEEP_MEASURE_MS)) break;
+                const auto count1 = wheelCounts(motors.getState(), left);
+                const double elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now()-start).count();
+                coastAll(motors);
+                const long long delta = count1-count0;
+                const double velocity = (static_cast<double>(delta)/CPR)
+                    * (2.0*3.14159265358979323846*WHEEL_RADIUS_M)/elapsed;
+                csv << wheelName(left) << ',' << directionName(direction) << ','
+                    << direction*duty << ',' << velocity << ',' << delta << ',' << elapsed << '\n';
+                csv.flush();
+                std::cout << wheelName(left) << ' ' << directionName(direction)
+                          << " duty=" << direction*duty << " speed=" << velocity << " m/s\n";
+                if (direction*velocity > 0.01) points.push_back({std::abs(velocity),duty});
+                else if (direction*velocity < -0.01) {
+                    std::cout << "ERROR: encoder sign inconsistent; stopping sweep.\n";
+                    return;
+                }
+            }
+            if (!keep_running) return;
+            printFeedforwardFit(points, left, direction);
+        }
+    }
+    std::cout << "\nSaved motor_pwm_sweep.csv\n";
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 
@@ -682,6 +788,7 @@ int main()
                 << "f : characterize FORWARD\n"
                 << "r : characterize REVERSE\n"
                 << "a : characterize BOTH directions\n"
+                << "s : steady-state PWM sweep + CSV + feedforward fits\n"
                 << "q : quit\n"
                 << "----------------------------------------\n"
                 << "> "
@@ -732,6 +839,14 @@ int main()
                 printDirectionResult(result, -1);
             }
 
+            else if (command == 's' || command == 'S') {
+                std::cout << "STOP the ROS driver first. Secure robot, elevate wheels,\n"
+                          << "keep clear of moving parts. Type y to confirm: ";
+                char confirm = 'n';
+                std::cin >> confirm;
+                if (confirm == 'y' || confirm == 'Y') runSteadySweep(motors);
+            }
+
             else if (command == 'a' || command == 'A') {
                 std::cout
                     << "\nThis will characterize BOTH directions.\n"
@@ -778,7 +893,7 @@ int main()
             }
 
             else {
-                std::cout << "Use f, r, a, or q.\n";
+                std::cout << "Use f, r, a, s, or q.\n";
             }
 
             coastAll(motors);

@@ -41,6 +41,7 @@ class WheelController:
         self.previous_error = [0.0, 0.0]     # error at the previous step [m/s]
         self.previous_command = [0.0, 0.0]   # command u sent at the previous step
         self.error_integral = [0.0, 0.0]     # running integral of the error [m]
+        self._previous_target = [0.0, 0.0]
 
         self._clock_started = False          # keeps time_s independent of your own state
 
@@ -107,55 +108,112 @@ class WheelController:
         # and the state set up in __init__. Use self.log(...) to record data.
 
         # BEGIN SOLUTION
-        # BEGIN SOLUTION
+        
+        # Independent PI velocity controllers with feedforward.
         outputs = []
+
         for i in (LEFT, RIGHT):
             cfg = self.config[i]
-            v_des = target_velocity_m_s[i]
-            v = measured_velocity_m_s[i]
-            error = v_des - v
+            target = target_velocity_m_s[i]
+            measured = measured_velocity_m_s[i]
+            error = target - measured
 
-            if abs(v_des) < cfg.zero_velocity_threshold:
-                # Target is ~0: stop the motor and clear the integrator.
+            limit = min(1.0, max(0.0, cfg.max_command))
+
+            # Zero-speed command: coast and reset controller state.
+            if abs(target) <= cfg.zero_velocity_threshold:
                 self.error_integral[i] = 0.0
                 ff = 0.0
                 fb = 0.0
-                u = 0.0
+                command = 0.0
+
             else:
-                # Feedforward (assumes the yaml values are positive magnitudes)
-                if v_des > 0.0:
-                    ff = cfg.forward_static + cfg.forward_velocity_gain * v_des
+                # Reset accumulated error on direction reversal.
+                previous_target = getattr(
+                    self, "_previous_target", [0.0, 0.0]
+                )[i]
+
+                if target * previous_target < 0.0:
+                    self.error_integral[i] = 0.0
+
+                # Direction-dependent feedforward.
+                if target > 0.0:
+                    ff = (
+                        cfg.forward_static
+                        + cfg.forward_velocity_gain * target
+                    )
+
+                    if measured < cfg.stopped_velocity_threshold:
+                        ff = max(ff, cfg.forward_breakaway)
+
                 else:
-                    ff = -(cfg.reverse_static + cfg.reverse_velocity_gain * abs(v_des))
+                    ff = -(
+                        cfg.reverse_static
+                        + cfg.reverse_velocity_gain * abs(target)
+                    )
 
-                # Feedback (PID)
-                candidate_integral = self.error_integral[i] + error * dt_s
-                derivative = 0.0 if self.first_step else (error - self.previous_error[i]) / dt_s
-                fb = cfg.kp * error + cfg.ki * candidate_integral + cfg.kd * derivative
+                    if measured > -cfg.stopped_velocity_threshold:
+                        ff = min(ff, -cfg.reverse_breakaway)
 
-                u_unsat = ff + fb
-                u = max(-cfg.max_command, min(cfg.max_command, u_unsat))
+                # PI feedback with conditional integration.
+                proportional = cfg.kp * error
+                candidate_integral = (
+                    self.error_integral[i] + error * dt_s
+                )
 
-                # Anti-windup: only keep integrating if not saturated,
-                # or if the error is pulling the output back out of saturation.
-                if abs(u_unsat) <= cfg.max_command or u_unsat * error < 0.0:
+                # Evaluate saturation using the candidate integral.
+                candidate_u = (
+                    ff + proportional
+                    + cfg.ki * candidate_integral
+                )
+
+                saturated_high = candidate_u > limit
+                saturated_low = candidate_u < -limit
+
+                # Only reject integration when it would
+                # drive the actuator further into saturation.
+                if not (
+                    (saturated_high and error > 0.0)
+                    or (saturated_low and error < 0.0)
+                ):
                     self.error_integral[i] = candidate_integral
 
-            self.previous_error[i] = error
-            self.previous_command[i] = u
-            outputs.append(WheelControllerOutput(
-                error_m_s=error, feedforward_command=ff,
-                feedback_command=fb, command=u))
+                fb = (
+                    proportional
+                    + cfg.ki * self.error_integral[i]
+                )
 
+                command = max(
+                    -limit, min(limit, ff + fb)
+                )
+
+            self.previous_error[i] = error
+            self.previous_command[i] = command
+
+            outputs.append(
+                WheelControllerOutput(
+                    error_m_s=error,
+                    feedforward_command=ff,
+                    feedback_command=fb,
+                    command=command,
+                )
+            )
+
+        self._previous_target = target_velocity_m_s.copy()
         self.first_step = False
 
-        self.log(time_s=self.time_s,
-                 left_target=target_velocity_m_s[LEFT], left_measured=measured_velocity_m_s[LEFT],
-                 left_command=outputs[LEFT].command,
-                 right_target=target_velocity_m_s[RIGHT], right_measured=measured_velocity_m_s[RIGHT],
-                 right_command=outputs[RIGHT].command)
+        self.log(
+            time_s=self.time_s,
+            left_target=target_velocity_m_s[LEFT],
+            left_measured=measured_velocity_m_s[LEFT],
+            left_command=outputs[LEFT].command,
+            right_target=target_velocity_m_s[RIGHT],
+            right_measured=measured_velocity_m_s[RIGHT],
+            right_command=outputs[RIGHT].command,
+        )
 
         return outputs
+
         # END SOLUTION
 
     def reset(self) -> None:
@@ -166,6 +224,7 @@ class WheelController:
         self.previous_error = [0.0, 0.0]
         self.previous_command = [0.0, 0.0]
         self.error_integral = [0.0, 0.0]
+        self._previous_target = [0.0, 0.0]
 
     def close(self) -> None:
         """Flush and close the log file (called by the node on shutdown)."""

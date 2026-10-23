@@ -32,7 +32,7 @@ sparcbot_driver:
       pwm_chip: 0
       pwm_channel: 0
       pwm_frequency_hz: 20000
-      motor_sign: -1
+      motor_sign: 1
       encoder_sign: -1
 
     right_motor:
@@ -68,38 +68,37 @@ odometry:
 # -----------------------------------------------------------------------------
 # Wheel velocity controller (feedforward + PID), one block per wheel.
 # -----------------------------------------------------------------------------
+
 wheel_controller:
   ros__parameters:
-    # CSV file for WheelController.log() (call it inside compute()); '' disables logging.
-    # Use an absolute path, e.g. /home/sparcbot/logs/ff_sweep.csv
     log_file: ''
 
     left:
-      kp: 0.0
-      ki: 0.0
+      kp: 2.0
+      ki: 1.0
       kd: 0.0
       feedforward:
-        forward_static: 0.0
-        forward_velocity_gain: 0.0
-        reverse_static: 0.0
-        reverse_velocity_gain: 0.0
-        forward_breakaway: 0.0
-        reverse_breakaway: 0.0
+        forward_static: 0.12
+        forward_velocity_gain: 1.5
+        reverse_static: 0.12
+        reverse_velocity_gain: 1.5
+        forward_breakaway: 0.18
+        reverse_breakaway: 0.18
         stopped_velocity_threshold: 0.025
-        max_command: 1.0
+        max_command: 0.5
         zero_velocity_threshold: 0.0005
 
     right:
-      kp: 0.0
-      ki: 0.0
+      kp: 2.0
+      ki: 1.0
       kd: 0.0
       feedforward:
-        forward_static: 0.0
-        forward_velocity_gain: 0.0
-        reverse_static: 0.0
-        reverse_velocity_gain: 0.0
-        forward_breakaway: 0.0
-        reverse_breakaway: 0.0
+        forward_static: 0.12
+        forward_velocity_gain: 1.5
+        reverse_static: 0.12
+        reverse_velocity_gain: 1.5
+        forward_breakaway: 0.18
+        reverse_breakaway: 0.18
         stopped_velocity_threshold: 0.025
-        max_command: 1.0
+        max_command: 0.5
         zero_velocity_threshold: 0.0005
